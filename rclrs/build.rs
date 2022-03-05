@@ -4,6 +4,8 @@ use std::env;
 use std::fs::read_dir;
 use std::path::{Path, PathBuf};
 
+const AMENT_PREFIX_PATH: &'static str = "AMENT_PREFIX_PATH";
+
 fn main() {
     let mut builder = bindgen::Builder::default()
         .header("src/rcl_wrapper.h")
@@ -25,9 +27,6 @@ fn main() {
             non_exhaustive: false,
         });
 
-    let ament_prefix_var_name = "AMENT_PREFIX_PATH";
-    let ament_prefix_var = env::var(ament_prefix_var_name);
-
     // #############
     // # ALGORITHM #
     // #############
@@ -43,7 +42,7 @@ fn main() {
     //
     // See REP 122 for more details: https://www.ros.org/reps/rep-0122.html#filesystem-layout
 
-    if let Ok(ament_prefix_paths) = ament_prefix_var {
+    if let Ok(ament_prefix_paths) = env::var(AMENT_PREFIX_PATH) {
         for ament_prefix_path in ament_prefix_paths.split(':').map(Path::new) {
             // Locate the ament index
             let ament_index = ament_prefix_path.join("share/ament_index/resource_index/packages");
