@@ -83,7 +83,7 @@ where
             )
             .ok()?;
         }
-
+ 
         let handle = Arc::new(PublisherHandle {
             handle: Mutex::new(publisher_handle),
             node_handle: node.handle.clone(),
