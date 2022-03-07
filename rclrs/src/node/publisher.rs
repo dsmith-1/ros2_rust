@@ -60,6 +60,7 @@ impl<T> Publisher<T>
 where
     T: MessageDefinition<T>,
 {
+    /// Creates new publisher.
     pub fn new(node: &Node, topic: &str, qos: QoSProfile) -> Result<Self, RclReturnCode>
     where
         T: MessageDefinition<T>,
