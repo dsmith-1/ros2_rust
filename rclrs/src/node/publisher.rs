@@ -14,24 +14,37 @@ use spin::{Mutex, MutexGuard};
 #[cfg(feature = "std")]
 use parking_lot::{Mutex, MutexGuard};
 
+/// The class that manages the `Publisher`'s C resource.
 pub struct PublisherHandle {
+    /// The `PublisherHandle`'s C resource manager.
     handle: Mutex<rcl_publisher_t>,
+
+    /// A thread-safe reference to the node that the `PublisherHandle` is attached to.
     node_handle: Arc<NodeHandle>,
 }
 
 impl PublisherHandle {
+    /// Returns a reference to the `PublisherHandle`'s `NodeHandle`.
     fn node_handle(&self) -> &NodeHandle {
         self.node_handle.borrow()
     }
 
+    /// Returns a mutable reference to `self.handle`.
     fn get_mut(&mut self) -> &mut rcl_publisher_t {
         self.handle.get_mut()
     }
 
+    /// Returns a mutex for `self.handle`.
+    /// 
+    /// Blocks the current thread until the mutex can be acquired.
     fn lock(&self) -> MutexGuard<rcl_publisher_t> {
         self.handle.lock()
     }
 
+    /// Returns a mutex for `self.handle` if it can be acquired. Otherwise, `None` is
+    /// returned.
+    /// 
+    /// Non-blocking.
     fn try_lock(&self) -> Option<MutexGuard<rcl_publisher_t>> {
         self.handle.try_lock()
     }
@@ -47,12 +60,16 @@ impl Drop for PublisherHandle {
     }
 }
 
-/// Main class responsible for publishing data to ROS topics
+/// Main class responsible for publishing data to ROS topics.
 pub struct Publisher<T>
 where
     T: MessageDefinition<T>,
 {
+    /// A thread-safe reference to the `Publisher`'s C resource manager.
     pub handle: Arc<PublisherHandle>,
+    
+    /// A `PhantomData<T>` instance, where `T` is the message type that the `Publisher`
+    /// can send.
     message: PhantomData<T>,
 }
 
@@ -60,7 +77,29 @@ impl<T> Publisher<T>
 where
     T: MessageDefinition<T>,
 {
-    /// Creates new publisher.
+    /// Creates a new publisher.
+    /// 
+    /// Returns `Ok(Publisher<T>)` on success, otherwise returns an error.
+    /// 
+    /// # Errors
+    /// 
+    /// Returns [`InvalidArgument`](error::RclReturnCode::InvalidArgument) if an 
+    /// argument is invalid.
+    /// 
+    /// Returns [`RclError(RclErrorCode::AlreadyInit)`](error::RclErrorCode::AlreadyInit) if 
+    /// the publisher is already initialized.
+    /// 
+    /// Returns [`NodeError(NodeErrorCode::NodeInvalid)`](error::NodeErrorCode::NodeInvalid) 
+    /// if the `node` is invalid.
+    /// 
+    /// Returns [`BadAlloc`](error::RclReturnCode::BadAlloc) if the function failed 
+    /// to allocate memory for the publisher.
+    /// 
+    /// Returns [`RclError(RclErrorCode::TopicNameInvalid)`](error::RclErrorCode::TopicNameInvalid) if 
+    /// the topic name is invalid.
+    /// 
+    /// Returns [`RclError(RclErrorCode::Error)`](error::RclErrorCode::Error) if there is an
+    /// unspecified error.
     pub fn new(node: &Node, topic: &str, qos: QoSProfile) -> Result<Self, RclReturnCode>
     where
         T: MessageDefinition<T>,
@@ -95,6 +134,17 @@ where
         })
     }
 
+    /// Publishes a message.
+    /// 
+    /// Returns `Ok(())` on success, otherwise returns an error.
+    /// 
+    /// # Errors
+    /// 
+    /// Returns [`RclError(RclErrorCode::PublisherInvalid)`](error::RclErrorCode::PublisherInvalid)
+    /// if the publisher handle is invalid.
+    /// 
+    /// Returns [`RclError(RclErrorCode::Error)`](error::RclErrorCode::Error) if there is an
+    /// unspecified error.
     pub fn publish(&self, message: &T) -> Result<(), RclReturnCode> {
         let native_message_ptr = message.get_native_message();
         let handle = &mut *self.handle.lock();
