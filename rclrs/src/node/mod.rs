@@ -6,9 +6,10 @@ use alloc::{
 use crate::error::{RclReturnCode, ToResult};
 use crate::qos::QoSProfile;
 use crate::rcl_bindings::*;
-use rclrs_msg_utilities::traits::MessageDefinition;
-
 use crate::{Context, ContextHandle};
+
+use rosidl_runtime_rs::Message;
+
 use cstr_core::CString;
 
 pub mod publisher;
@@ -26,10 +27,6 @@ use parking_lot::{Mutex, MutexGuard};
 pub struct NodeHandle(Mutex<rcl_node_t>);
 
 impl NodeHandle {
-    /// Returns a mutable reference to the `rcl_node`.
-    pub fn get_mut(&mut self) -> &mut rcl_node_t {
-        self.0.get_mut()
-    }
 
     /// Returns a mutex for `rcl_node`.
     /// 
@@ -37,19 +34,11 @@ impl NodeHandle {
     pub fn lock(&self) -> MutexGuard<rcl_node_t> {
         self.0.lock()
     }
-
-    /// Returns a mutex for `rcl_node` if it can be acquired. Otherwise, `None` is
-    /// returned.
-    /// 
-    /// Non-blocking.
-    pub fn try_lock(&self) -> Option<MutexGuard<rcl_node_t>> {
-        self.0.try_lock()
-    }
 }
 
 impl Drop for NodeHandle {
     fn drop(&mut self) {
-        let handle = &mut *self.get_mut();
+        let handle = &mut *self.0.get_mut();
         unsafe { rcl_node_fini(handle as *mut _).unwrap() };
     }
 }
@@ -69,11 +58,11 @@ pub struct Node {
 impl Node {
     /// T
     #[allow(clippy::new_ret_no_self)]
-    pub fn new<'ctxt>(node_name: &str, context: &Context) -> Result<Node, RclReturnCode> {
+    pub fn new(node_name: &str, context: &Context) -> Result<Node, RclReturnCode> {
         Self::new_with_namespace(node_name, "", context)
     }
 
-    /// Initializes a new ROS node.
+        /// Initializes a new ROS node.
     /// 
     /// Returns `Ok(Node)` on success, otherwise returns an error.
     /// 
@@ -120,7 +109,7 @@ impl Node {
     /// 
     /// Returns [`RclError(RclErrorCode::Error)`](error::RclErrorCode::Error) if there is an
     /// unspecified error.
-    pub fn new_with_namespace<'ctxt>(
+    pub fn new_with_namespace(
         node_name: &str,
         node_ns: &str,
         context: &Context,
@@ -159,7 +148,7 @@ impl Node {
         qos: QoSProfile,
     ) -> Result<Publisher<T>, RclReturnCode>
     where
-        T: MessageDefinition<T>,
+        T: Message,
     {
         Publisher::<T>::new(self, topic, qos)
     }
@@ -172,7 +161,7 @@ impl Node {
         callback: F,
     ) -> Result<Arc<Subscription<T>>, RclReturnCode>
     where
-        T: MessageDefinition<T> + Default,
+        T: Message + 'static,
         F: FnMut(&T) + Sized + 'static,
     {
         let subscription = Arc::new(Subscription::<T>::new(self, topic, qos, callback)?);

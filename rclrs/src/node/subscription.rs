@@ -1,13 +1,13 @@
 use crate::error::ToResult;
 use crate::qos::QoSProfile;
-use crate::{rcl_bindings::*, to_rcl_result, RclReturnCode, SubscriberErrorCode};
+use crate::{rcl_bindings::*, RclReturnCode};
 use crate::{Node, NodeHandle};
 use alloc::boxed::Box;
 use alloc::sync::Arc;
 use core::borrow::Borrow;
 use core::marker::PhantomData;
 use cstr_core::CString;
-use rclrs_msg_utilities::traits::{Message, MessageDefinition};
+use rosidl_runtime_rs::{Message, RmwMessage};
 
 #[cfg(not(feature = "std"))]
 use spin::{Mutex, MutexGuard};
@@ -25,29 +25,11 @@ pub struct SubscriptionHandle {
 }
 
 impl SubscriptionHandle {
-    /// Returns a reference to the `SubscriptionHandle`'s `NodeHandle`.
-    fn node_handle(&self) -> &NodeHandle {
-        self.node_handle.borrow()
-    }
-
-    /// Returns a mutable reference to `self.handle`.
-    pub fn get_mut(&mut self) -> &mut rcl_subscription_t {
-        self.handle.get_mut()
-    }
-
     /// Returns a mutex for `self.handle`.
     /// 
     /// Blocks the current thread until the mutex can be acquired.
     pub fn lock(&self) -> MutexGuard<rcl_subscription_t> {
         self.handle.lock()
-    }
-
-    /// Returns a mutex for `self.handle` if it can be acquired. Otherwise, `None` is
-    /// returned.
-    /// 
-    /// Non-blocking.
-    pub fn try_lock(&self) -> Option<MutexGuard<rcl_subscription_t>> {
-        self.handle.try_lock()
     }
 }
 
@@ -66,56 +48,7 @@ impl Drop for SubscriptionHandle {
 pub trait SubscriptionBase {
     /// Returns a reference to he `SubscriptionHandle`'s C resource manager.
     fn handle(&self) -> &SubscriptionHandle;
-
-    /// Creates and returns a `Message` that's stored on the heap.
-    fn create_message(&self) -> Box<dyn Message>;
-
-    /// The function to be called on each message that the `SubscriptionBase` receives.
-    fn callback_fn(&self, message: Box<dyn Message>) -> ();
-
-    /// Ask RMW for the data
-    ///
-    /// +-------------+
-    /// | rclrs::take |
-    /// +------+------+
-    ///        |
-    ///        |
-    /// +------v------+
-    /// |  rcl_take   |
-    /// +------+------+
-    ///        |
-    ///        |
-    /// +------v------+
-    /// |  rmw_take   |
-    /// +-------------+
-    fn take(&self, message: &mut dyn Message) -> Result<bool, RclReturnCode> {
-        let handle = &mut *self.handle().lock();
-        let message_handle = message.get_native_message();
-
-        let result = unsafe {
-            rcl_take(
-                handle as *const _,
-                message_handle as *mut _,
-                core::ptr::null_mut(),
-                core::ptr::null_mut(),
-            )
-        };
-
-        let result = match to_rcl_result(result) {
-            Ok(()) => {
-                message.read_handle(message_handle);
-                Ok(true)
-            }
-            Err(RclReturnCode::SubscriberError(SubscriberErrorCode::SubscriptionTakeFailed)) => {
-                Ok(false)
-            }
-            Err(error) => Err(error.into()),
-        };
-
-        message.destroy_native_message(message_handle);
-
-        result
-    }
+    fn execute(&self) -> Result<(), RclReturnCode>;
 }
 
 /// Main class responsible for subscribing to topics and receiving data over IPC in ROS
@@ -169,11 +102,12 @@ where
         callback: F,
     ) -> Result<Self, RclReturnCode>
     where
-        T: MessageDefinition<T>,
+        T: Message,
         F: FnMut(&T) + Sized + 'static,
     {
         let mut subscription_handle = unsafe { rcl_get_zero_initialized_subscription() };
-        let type_support = T::get_type_support() as *const rosidl_message_type_support_t;
+        let type_support =
+            <T as Message>::RmwMsg::get_type_support() as *const rosidl_message_type_support_t;
         let topic_c_string = CString::new(topic).unwrap();
         let node_handle = &mut *node.handle.lock();
 
@@ -202,7 +136,22 @@ where
         })
     }
 
-    /// Take a ROS message from a topic.
+    /// Ask RMW for the data
+    ///
+    /// +-------------+
+    /// | rclrs::take |
+    /// +------+------+
+    ///        |
+    ///        |
+    /// +------v------+
+    /// |  rcl_take   |
+    /// +------+------+
+    ///        |
+    ///        |
+    /// +------v------+
+    /// |  rmw_take   |
+    /// +-------------+
+    /// 
     /// 
     /// # Errors
     /// 
@@ -214,49 +163,33 @@ where
     /// 
     /// Returns [`InvalidArgument`](error::RclReturnCode::InvalidArgument) if an 
     /// argument is invalid.
-    pub fn take(&self, message: &mut T) -> Result<(), RclReturnCode> {
+    pub fn take(&self) -> Result<T, RclReturnCode> {
+        let mut rmw_message = <T as Message>::RmwMsg::default();
         let handle = &mut *self.handle.lock();
-        let message_handle = message.get_native_message();
         let ret = unsafe {
             rcl_take(
                 handle as *const _,
-                message_handle as *mut _,
+                &mut rmw_message as *mut <T as Message>::RmwMsg as *mut _,
                 core::ptr::null_mut(),
                 core::ptr::null_mut(),
             )
         };
-        message.read_handle(message_handle);
-        message.destroy_native_message(message_handle);
-        ret.ok().map_err(|err| err.into())
-    }
-
-    /// Locks then runs the callback function on a `Message`.
-    /// 
-    /// Returns `Ok(())` on success, otherwise returns an error.
-    /// 
-    /// # Errors
-    /// 
-    /// TODO
-    fn callback_ext(&self, message: Box<dyn Message>) -> Result<(), RclReturnCode> {
-        let msg = message.downcast_ref().unwrap();
-        (&mut *self.callback.lock())(msg);
-        Ok(())
+        ret.ok()?;
+        Ok(T::from_rmw_message(rmw_message))
     }
 }
 
 impl<T> SubscriptionBase for Subscription<T>
 where
-    T: MessageDefinition<T> + core::default::Default,
+    T: Message,
 {
     fn handle(&self) -> &SubscriptionHandle {
         self.handle.borrow()
     }
 
-    fn create_message(&self) -> Box<dyn Message> {
-        Box::new(T::default())
-    }
-
-    fn callback_fn(&self, message: Box<dyn Message>) {
-        self.callback_ext(message);
+    fn execute(&self) -> Result<(), RclReturnCode> {
+        let msg = self.take()?;
+        (&mut *self.callback.lock())(&msg);
+        Ok(())
     }
 }

@@ -12,7 +12,7 @@ use spin::{Mutex, MutexGuard};
 use parking_lot::{Mutex, MutexGuard};
 
 /// The class that manages the `Context`'s C resource.
-pub struct ContextHandle(Mutex<rcl_context_t>);
+pub(crate) struct ContextHandle(Mutex<rcl_context_t>);
 
 impl ContextHandle {
     /// Returns a mutable reference to the `rcl_context`.
@@ -25,14 +25,6 @@ impl ContextHandle {
     /// Blocks the current thread until the mutex can be acquired.
     pub fn lock(&self) -> MutexGuard<rcl_context_t> {
         self.0.lock()
-    }
-
-    /// Returns a mutex for the context's handle if it can be acquired. Otherwise, 
-    /// `None` is returned.
-    /// 
-    /// Non-blocking.
-    pub fn try_lock(&self) -> Option<MutexGuard<rcl_context_t>> {
-        self.0.try_lock()
     }
 }
 
@@ -53,7 +45,7 @@ impl Drop for ContextHandle {
 /// 
 /// [Source](https://docs.ros2.org/dashing/api/rclcpp/classrclcpp_1_1Context.html#details)
 pub struct Context {
-    pub handle: Arc<ContextHandle>,
+    pub(crate) handle: Arc<ContextHandle>,
 }
 
 impl Context {
@@ -125,6 +117,6 @@ impl Context {
 
     // TODO: documentation
     pub fn create_node(&self, node_name: &str) -> Result<Node, RclReturnCode> {
-        Ok(Node::new(node_name, self)?)
+        Node::new(node_name, self)
     }
 }

@@ -3,19 +3,18 @@ use crate::qos::QoSProfile;
 use crate::rcl_bindings::*;
 use crate::{Node, NodeHandle};
 use alloc::sync::Arc;
-use core::borrow::Borrow;
 use core::marker::PhantomData;
 use cstr_core::CString;
-use rclrs_msg_utilities::traits::MessageDefinition;
+use rosidl_runtime_rs::{Message, RmwMessage};
+use std::borrow::Cow;
 
 #[cfg(not(feature = "std"))]
 use spin::{Mutex, MutexGuard};
 
 #[cfg(feature = "std")]
 use parking_lot::{Mutex, MutexGuard};
-
 /// The class that manages the `Publisher`'s C resource.
-pub struct PublisherHandle {
+pub(crate) struct PublisherHandle {
     /// The `PublisherHandle`'s C resource manager.
     handle: Mutex<rcl_publisher_t>,
 
@@ -24,29 +23,11 @@ pub struct PublisherHandle {
 }
 
 impl PublisherHandle {
-    /// Returns a reference to the `PublisherHandle`'s `NodeHandle`.
-    fn node_handle(&self) -> &NodeHandle {
-        self.node_handle.borrow()
-    }
-
-    /// Returns a mutable reference to `self.handle`.
-    fn get_mut(&mut self) -> &mut rcl_publisher_t {
-        self.handle.get_mut()
-    }
-
     /// Returns a mutex for `self.handle`.
     /// 
     /// Blocks the current thread until the mutex can be acquired.
     fn lock(&self) -> MutexGuard<rcl_publisher_t> {
         self.handle.lock()
-    }
-
-    /// Returns a mutex for `self.handle` if it can be acquired. Otherwise, `None` is
-    /// returned.
-    /// 
-    /// Non-blocking.
-    fn try_lock(&self) -> Option<MutexGuard<rcl_publisher_t>> {
-        self.handle.try_lock()
     }
 }
 
@@ -63,11 +44,11 @@ impl Drop for PublisherHandle {
 /// Main class responsible for publishing data to ROS topics.
 pub struct Publisher<T>
 where
-    T: MessageDefinition<T>,
+    T: Message,
 {
     /// A thread-safe reference to the `Publisher`'s C resource manager.
-    pub handle: Arc<PublisherHandle>,
-    
+    pub(crate) handle: Arc<PublisherHandle>,
+
     /// A `PhantomData<T>` instance, where `T` is the message type that the `Publisher`
     /// can send.
     message: PhantomData<T>,
@@ -75,7 +56,7 @@ where
 
 impl<T> Publisher<T>
 where
-    T: MessageDefinition<T>,
+    T: Message,
 {
     /// Creates a new publisher.
     /// 
@@ -102,10 +83,11 @@ where
     /// unspecified error.
     pub fn new(node: &Node, topic: &str, qos: QoSProfile) -> Result<Self, RclReturnCode>
     where
-        T: MessageDefinition<T>,
+        T: Message,
     {
         let mut publisher_handle = unsafe { rcl_get_zero_initialized_publisher() };
-        let type_support = T::get_type_support() as *const rosidl_message_type_support_t;
+        let type_support =
+            <T as Message>::RmwMsg::get_type_support() as *const rosidl_message_type_support_t;
         let topic_c_string = CString::new(topic).unwrap();
         let node_handle = &mut *node.handle.lock();
 
@@ -137,6 +119,18 @@ where
     /// Publishes a message.
     /// 
     /// Returns `Ok(())` on success, otherwise returns an error.
+    ///
+    /// The [`MessageCow`] trait is implemented by any
+    /// [`Message`] as well as any reference to a `Message`.
+    ///
+    /// The reason for allowing owned messages is that publishing owned messages can be more
+    /// efficient in the case of idiomatic messages[^note].
+    ///
+    /// [^note]: See the [`Message`] trait for an explanation of "idiomatic".
+    ///
+    /// Hence, when a message will not be needed anymore after publishing, pass it by value.
+    /// When a message will be needed again after publishing, pass it by reference, instead of cloning and passing by value.
+    /// 
     /// 
     /// # Errors
     /// 
@@ -145,17 +139,33 @@ where
     /// 
     /// Returns [`RclError(RclErrorCode::Error)`](error::RclErrorCode::Error) if there is an
     /// unspecified error.
-    pub fn publish(&self, message: &T) -> Result<(), RclReturnCode> {
-        let native_message_ptr = message.get_native_message();
+    pub fn publish<'a, M: MessageCow<'a, T>>(&self, message: M) -> Result<(), RclReturnCode> {
+        let rmw_message = T::into_rmw_message(message.into_cow());
         let handle = &mut *self.handle.lock();
         let ret = unsafe {
             rcl_publish(
                 handle as *mut _,
-                native_message_ptr as *mut _,
+                rmw_message.as_ref() as *const <T as Message>::RmwMsg as *mut _,
                 core::ptr::null_mut(),
             )
         };
-        message.destroy_native_message(native_message_ptr);
         ret.ok()
+    }
+}
+
+/// Convenience trait for [`Publisher::publish`].
+pub trait MessageCow<'a, T: Message> {
+    fn into_cow(self) -> Cow<'a, T>;
+}
+
+impl<'a, T: Message> MessageCow<'a, T> for T {
+    fn into_cow(self) -> Cow<'a, T> {
+        Cow::Owned(self)
+    }
+}
+
+impl<'a, T: Message> MessageCow<'a, T> for &'a T {
+    fn into_cow(self) -> Cow<'a, T> {
+        Cow::Borrowed(self)
     }
 }
