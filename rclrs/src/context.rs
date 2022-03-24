@@ -38,12 +38,8 @@ impl Drop for ContextHandle {
 
 /// The main class for managing a ROS context.
 /// 
-/// "Context which encapsulates shared state between nodes and other similar entities.
-/// A context also represents the lifecycle between init and shutdown of rclcpp. It is often used 
-/// in conjunction with [`rclcpp::init`](https://docs.ros2.org/dashing/api/rclcpp/namespacerclcpp.html#a2db29afebba8f677bc8660a45bb910bb), 
-/// or `rclcpp::init_local`, and [`rclcpp::shutdown`](https://docs.ros2.org/dashing/api/rclcpp/namespacerclcpp.html#a493714a679d1591142800416a286689f)."
-/// 
-/// [Source](https://docs.ros2.org/dashing/api/rclcpp/classrclcpp_1_1Context.html#details)
+/// A context encapsulates shared state between nodes and other similar entities.
+/// For more information, please see the [ROS2 Dashing Documentation](https://docs.ros2.org/dashing/api/rclcpp/classrclcpp_1_1Context.html#details).
 pub struct Context {
     pub(crate) handle: Arc<ContextHandle>,
 }
